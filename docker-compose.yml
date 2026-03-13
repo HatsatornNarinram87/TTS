@@ -1,0 +1,12 @@
+services:
+  tts:
+    build: .
+    image: n8n-tts
+    container_name: tts
+    ports:
+      - "4000:4000"
+    environment:
+      TZ: Asia/Bangkok
+      GENERIC_TIMEZONE: Asia/Bangkok
+    volumes:
+      - .:/app  # เปลี่ยนตรงนี้เพื่อให้เชื่อมกับโฟลเดอร์ปัจจุบันในเครื่อง
