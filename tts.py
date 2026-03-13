@@ -13,9 +13,9 @@ import tempfile
 app = Flask(__name__)
 
 
-async def generate_voice(text, voice="en-US-AvaNeural", rate="-20%"):
+async def generate_voice(text, voice="en-US-AvaNeural", rate="-20%", volume="+50%"):
     # เพิ่มพารามิเตอร์ rate เข้าไปที่ Communicate
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
+    communicate = edge_tts.Communicate(text, voice, rate=rate, volume=volume)
     audio_data = b""
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
@@ -32,17 +32,24 @@ def seconds_to_srt_time(s):
     return f"{h:02}:{m:02}:{sec:02},{ms:03}"
 
 
-def generate_srt_from_audio(audio_path, output_path=None, model_size="base"):
+def generate_srt_from_audio(audio_path, output_path=None, model_size="base", words_per_segment=6):
     model = whisper.load_model(model_size)
     result = model.transcribe(audio_path, word_timestamps=True)
 
+    # --- ส่วนที่ 1: สร้าง SRT แบบกลุ่มละ 5-6 คำ (แทนที่ srt_content เดิม) ---
+    all_words = []
+    for segment in result["segments"]:
+        all_words.extend(segment["words"])
+
     srt_lines = []
     index = 1
-
-    for segment in result["segments"]:
-        start = seconds_to_srt_time(segment["start"])
-        end = seconds_to_srt_time(segment["end"])
-        text = segment["text"].strip()
+    
+    for i in range(0, len(all_words), words_per_segment):
+        chunk = all_words[i : i + words_per_segment]
+        start = seconds_to_srt_time(chunk[0]["start"])
+        end = seconds_to_srt_time(chunk[-1]["end"])
+        text = " ".join([w["word"].strip() for w in chunk])
+        
         srt_lines.append(f"{index}")
         srt_lines.append(f"{start} --> {end}")
         srt_lines.append(text)
@@ -50,17 +57,21 @@ def generate_srt_from_audio(audio_path, output_path=None, model_size="base"):
         index += 1
 
     srt_content = "\n".join(srt_lines)
+    
     if output_path:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(srt_content)
 
+    # --- ส่วนที่ 2: สร้าง SRT แบบคำต่อคำ (word_srt_content ของเดิมที่คุณเขียนไว้) ---
     word_srt_lines = []
     index = 1
+    
     for segment in result["segments"]:
         for word in segment["words"]:
             start = seconds_to_srt_time(word["start"])
             end = seconds_to_srt_time(word["end"])
             text = word["word"].strip()
+            
             word_srt_lines.append(f"{index}")
             word_srt_lines.append(f"{start} --> {end}")
             word_srt_lines.append(text)
@@ -68,14 +79,15 @@ def generate_srt_from_audio(audio_path, output_path=None, model_size="base"):
             index += 1
 
     word_srt_content = "\n".join(word_srt_lines)
+    
     if output_path:
         # บันทึกเป็นไฟล์ที่ 2 อัตโนมัติ เช่น output_word.srt
         word_output_path = output_path.replace(".srt", "_word.srt")
         with open(word_output_path, 'w', encoding='utf-8') as f:
             f.write(word_srt_content)
 
+    # Return 2 ค่าเหมือนเดิมเป๊ะๆ ครับ
     return srt_content, word_srt_content
-
 
 def combine_audio():
     output_files = sorted([
