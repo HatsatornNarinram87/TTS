@@ -1,118 +1,125 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
-
-// นำเข้า ghost-cursor
-const { createCursor } = require('ghost-cursor');
-
-// ฟังก์ชันหน่วงเวลา
+const { spawn } = require('child_process'); // 🌟 นำเข้าตัวสั่งรันโปรแกรมใน OS
+// 🌟 1. นำเข้า ffmpeg-static จะได้ Path ของ ffmpeg.exe แบบเป๊ะๆ
+const ffmpegPath = require('ffmpeg-static');
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
     console.log('กำลังเชื่อมต่อไปยัง Chrome ที่เปิดไว้ (Port 9222)...');
-
-    // เชื่อมต่อไปยัง Chrome ที่เราเปิดประตูหลังไว้
     const browser = await puppeteer.connect({
       browserURL: 'http://127.0.0.1:9222',
       defaultViewport: null
     });
 
-    // ดึงหน้าต่างที่เปิดอยู่มาใช้งาน
     const pages = await browser.pages();
     const page = pages.length > 0 ? pages[0] : await browser.newPage();
 
-    // 🌟 สร้าง เมาส์ผี (Ghost Cursor) ประจำหน้าเว็บนี้ (นี่คือบรรทัดที่หายไปครับ!)
-    const cursor = createCursor(page);
+    // ดึงหน้าเว็บนี้ขึ้นมาให้ Active (สำคัญมาก ไม่งั้นคีย์ลัดจะไม่ทำงาน)
+    await page.bringToFront();
 
     console.log('1. กำลังไปที่หน้าเว็บ ElevenLabs...');
     await page.goto('https://elevenlabs.io/', { waitUntil: 'networkidle2' });
+    await delay(2000);
 
     // ==========================================
-    // 2. ค้นหาและเลือกเสียงคนที่ 3 (ใช้พิกัดเมาส์)
+    // 2. เลือกเสียงคนที่ 3 (ใช้พิกัด)
     // ==========================================
-    console.log('2. กำลังรอให้รายการเสียงโหลด...');
+    console.log('2. กำลังเลือก Voice Actor...');
     const voiceSelector = '.tw-w-full.tw-relative.tw-snap-start';
     await page.waitForSelector(voiceSelector);
-
     const voiceItems = await page.$$(voiceSelector);
-
     if (voiceItems.length >= 3) {
-      console.log('-> เจอกล่องเสียงแล้ว กำลังคำนวณพิกัด...');
       const label = await voiceItems[2].$('label');
-
       if (label) {
-        // 🌟 ดึงพิกัด (X, Y) ของป้ายชื่อนักพากย์คนที่ 3
         const box = await label.boundingBox();
         if (box) {
           const targetX = box.x + (box.width / 2);
           const targetY = box.y + (box.height / 2);
-
-          // 🌟 สั่งเมาส์เลื่อนไปช้าๆ (steps: 20 คือความเนียนในการขยับ)
           await page.mouse.move(targetX, targetY, { steps: 20 });
-
-          // แกล้งหยุดเมาส์ชั่วคราวให้เหมือนคนกำลังเล็ง
           await delay(500);
-
-          // 🌟 สั่งคลิกเมาส์ซ้าย
           await page.mouse.click(targetX, targetY);
-          console.log('-> เลื่อนเมาส์ไปคลิกเลือกเสียงสำเร็จ!');
         }
       }
-    } else {
-      console.log('-> ❌ ไม่พบรายการเสียงถึง 3 รายการ');
     }
-    await delay(1000);
+    await delay(1500);
 
-    // 3. จัดการช่องกรอกข้อความ
-    console.log('3. กำลังค้นหาช่องพิมพ์ข้อความ...');
+    // ==========================================
+    // 3. พิมพ์ข้อความ
+    // ==========================================
+    console.log('3. กำลังพิมพ์ข้อความ...');
     const textAreaSelector = 'textarea[aria-label*="Enter your text"]';
     await page.waitForSelector(textAreaSelector);
 
-    console.log('-> ลบข้อความเดิม...');
+    const textArea = await page.$(textAreaSelector);
+    const taBox = await textArea.boundingBox();
+    if (taBox) await page.mouse.click(taBox.x + 10, taBox.y + 10);
+
     await page.click(textAreaSelector, { clickCount: 3 });
     await page.keyboard.press('Backspace');
+    await delay(500);
 
-    const myText = "สวัสดีครับ บอทสามารถเลื่อนเมาส์และสร้างเสียงได้สำเร็จแล้วครับ";
-    console.log(`-> กำลังพิมพ์ข้อความใหม่: "${myText}"`);
+    const myText = "สวัสดีครับ ทดสอบการสั่งงานส่วนขยายอัดเสียงด้วยคีย์ลัดครับ";
+    console.log(`-> พิมพ์ข้อความ: "${myText}"`);
     await page.type(textAreaSelector, myText, { delay: 50 });
-
     await delay(1000);
 
     // ==========================================
-    // 4. เลื่อนเมาส์ไปกดปุ่ม Play ด้วยพิกัด (X, Y)
+    // 🔴 ท่าไม้ตาย System Audio: สั่ง FFmpeg เริ่มอัดเสียงจากคอม
     // ==========================================
-    console.log('4. กำลังหาพิกัดปุ่ม Play...');
+    console.log('🔴 กำลังเปิดระบบอัดเสียงจาก OS (Stereo Mix)...');
+
+    // สั่งรัน ffmpeg.exe ดึงเสียงจาก Stereo Mix เซฟเป็น final_audio.mp3
+    // สมมติว่าคอมคุณชื่อ "สเตอริโอมิกซ์ (Realtek(R) Audio)" 
+    // ให้แก้โค้ดเป็นแบบนี้ครับ (ระวังอย่าลืมคำว่า audio= นำหน้านะครับ)
+    const ffmpegProcess = spawn(ffmpegPath, [
+      '-f', 'dshow',
+      '-i', 'audio=Microphone (4- USB Audio Device)', // 👈 เปลี่ยนตรงนี้ให้ตรงกับคอมคุณ
+      '-y',
+      'final_audio.mp3'
+    ]);
+
+    ffmpegProcess.stderr.on('data', (data) => {
+      // ffmpeg จะพ่น log ออกมาทาง stderr (เป็นเรื่องปกติของมัน)
+      console.log(`FFmpeg: ${data}`); // เปิดคอมเมนต์นี้ถ้าอยากดู log การอัด
+    });
+
+    // ให้เวลาโปรแกรมอัดเสียงเตรียมตัว 1.5 วินาที
+    await delay(1500);
+
+    // ==========================================
+    // ▶️ กดปุ่ม Play ให้เว็บพูด
+    // ==========================================
+    console.log('▶️ กำลังกดปุ่ม Play บนหน้าเว็บ...');
     const playBtnSelector = 'button[aria-label="Play"]';
     await page.waitForSelector(playBtnSelector);
-
-    // ดึง Element ของปุ่มมา
     const playBtn = await page.$(playBtnSelector);
-    const box = await playBtn.boundingBox();
+    const pbBox = await playBtn.boundingBox();
 
-    if (box) {
-      // หาจุดกึ่งกลางของปุ่ม
-      const targetX = box.x + (box.width / 2);
-      const targetY = box.y + (box.height / 2);
-
-      console.log(`-> เจอพิกัดปุ่มแล้วที่ (X: ${targetX}, Y: ${targetY})`);
-
-      // 🌟 สั่งเมาส์จำลอง ค่อยๆ เลื่อนไปที่ปุ่ม 
-      // steps: 25 คือให้มันซอยย่อยการขยับเมาส์ 25 ครั้งให้ดูเหมือนคนลากเมาส์
-      await page.mouse.move(targetX, targetY, { steps: 25 });
-
-      // แกล้งหยุดเมาส์ทิ้งไว้ที่ปุ่ม 1 วินาที (Hover) ให้เว็บคิดว่าคนกำลังเล็ง
-      await delay(1000);
-
-      console.log('-> คลิกลงไปแล้ว!');
-      // 🌟 สั่งคลิกเมาส์ซ้ายที่พิกัดนั้น
+    if (pbBox) {
+      const targetX = pbBox.x + (pbBox.width / 2);
+      const targetY = pbBox.y + (pbBox.height / 2);
+      await page.mouse.move(targetX, targetY, { steps: 20 });
+      await delay(500);
       await page.mouse.click(targetX, targetY);
 
-      console.log('🎉 เลื่อนเมาส์ไปกดปุ่มสำเร็จ! รอดูผลลัพธ์ครับ');
-    } else {
-      console.log('❌ คำนวณพิกัดปุ่มไม่ได้ (ปุ่มอาจจะโดนซ่อนอยู่)');
-    }
+      console.log('⏳ กำลังอัดเสียงจากลำโพง กรุณารอเงียบๆ อย่าเปิดเพลงแทรกนะครับ...');
 
+      // 🌟 รอให้เสียงพูดจบ (กะเวลาเผื่อไว้ตามความยาวข้อความ สมมติว่า 10 วินาที)
+      await delay(10000);
+
+      // ==========================================
+      // ⏹️ สั่งหยุดอัดเสียง
+      // ==========================================
+      console.log('⏹️ สั่งหยุดอัดเสียง...');
+
+      // ส่งตัวอักษร 'q' (Quit) ไปให้ ffmpeg เพื่อสั่งให้มันเซฟไฟล์และปิดตัวลงอย่างถูกต้อง
+      ffmpegProcess.stdin.write('q\n');
+
+      console.log('🎉 เซฟไฟล์เสียง "final_audio.mp3" สำเร็จเรียบร้อย 100%!');
+    }
   } catch (error) {
     console.error('❌ เกิดข้อผิดพลาด:', error);
   }
