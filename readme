@@ -1,0 +1,2 @@
+/// to compiler c++  with this __LINE__
+// g++ -o outDebug.exe hello.cpp -lole32 -loleaut32 -lwinmm -std=c++17 -static -static-libgcc -static-libstdc++

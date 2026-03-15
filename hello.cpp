@@ -259,9 +259,14 @@ int main()
   std::cout << "[+] Output: " << outFile << "\n";
 
   std::thread recThread(CaptureLoop, pClient, pCap, outFile, wfx);
-  
-  std::cin.get();
-  g_running = false;
+
+  std::thread inputThread([]()
+                          {
+    char c;
+    std::cin.read(&c, 1);
+    g_running = false; });
+
+  inputThread.join();
   recThread.join();
 
   CoTaskMemFree(wfx);
