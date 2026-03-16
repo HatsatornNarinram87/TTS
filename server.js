@@ -15,7 +15,7 @@ app.post("/voice", async (req, res) => {
   }
 
 
-  // axios.get("http://localhost:4000/receive");
+  axios.get("http://localhost:4000/receive");
 
   res.json({ status: "ok" });
 });

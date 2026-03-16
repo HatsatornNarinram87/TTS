@@ -4,11 +4,60 @@ puppeteer.use(StealthPlugin());
 const path = require('path');
 const { spawn } = require("child_process");
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+require('dotenv').config({ path: 'bot.env' });
 
+let browser = null;
+let browserProcess = null;
+
+// ฟังก์ชัน retry เชื่อมต่อจนกว่าจะสำเร็จ
+async function waitForBrowser(url, maxRetries = 10, delay = 1000) {
+  for (let i = 1; i <= maxRetries; i++) {
+    try {
+      const res = await fetch(`${url}/json/version`);
+      if (res.ok) {
+        console.log(`✅ Browser พร้อมแล้ว (ลองครั้งที่ ${i})`);
+        return true;
+      }
+    } catch {
+      console.log(`⏳ รอ Browser... (${i}/${maxRetries})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error('❌ Browser ไม่ตอบสนองภายในเวลาที่กำหนด');
+}
 async function speakAndRecord(text, voiceIndex) {
   try {
+
+    // สร้าง random profile name แทน %RANDOM%
+    const randomId = Math.floor(Math.random() * 32767);
+    const profilePath = `C:\\Users\\Tawan\\Desktop\\Code\\n8n\\TTS\\temp\\profile-${randomId}`;
+
+    // ใช้ spawn แทน execSync เพื่อไม่ให้ block
+    const browserPath = `C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`;
+
+    const browserProcess = spawn(browserPath, [
+      '--remote-debugging-port=9222',
+      `--user-data-dir=${profilePath}`,
+      '--no-first-run',           // ✅ ข้าม welcome screen
+      '--no-default-browser-check',
+      '--disable-extensions',    // ✅ ลด interference
+      '--force-device-scale-factor=0.8',  // ✅ ซูม 80%
+    ], {
+      detached: true,   // ให้ browser ทำงานอิสระจาก Node process
+      stdio: 'ignore'   // ไม่รับ output จาก browser
+    });
+
+    browserProcess.unref(); // ปล่อยให้ Node.js จบได้โดยไม่ต้องรอ browser
+
+    console.log(`เปิด Brave Browser สำเร็จ (PID: ${browserProcess.pid})`);
+    console.log(`Profile: ${profilePath}`);
+    console.log(`Remote Debugging: http://localhost:9222`);
+
+    // ✅ รอจนกว่า browser จะพร้อมจริงๆ (ไม่ใช่แค่ setTimeout)
+    await waitForBrowser('http://127.0.0.1:9222');
+
     console.log('กำลังเชื่อมต่อไปยัง Chrome ที่เปิดไว้ (Port 9222)...');
-    const browser = await puppeteer.connect({
+    browser = await puppeteer.connect({
       browserURL: 'http://127.0.0.1:9222',
       defaultViewport: null
     });
@@ -93,15 +142,51 @@ async function speakAndRecord(text, voiceIndex) {
       console.log('✅ เว็บพูดจบแล้ว');
 
       recorder.stdin.write('\n');
-
       await new Promise(r => setTimeout(r, 0));
 
       console.log('⏹️ สั่งหยุดอัดเสียง...');
+
     }
 
   } catch (error) {
     console.error('❌ เกิดข้อผิดพลาด:', error);
+  } finally {
+    // 1. ปิด Puppeteer ก่อน
+    if (browser) await browser.close();
+
+    // 2. รอให้ browserProcess จบสนิท
+    if (browserProcess) {
+      await new Promise((resolve) => {
+        browserProcess.on('close', resolve);  // รอ event 'close'
+        browserProcess.kill();
+        setTimeout(resolve, 3000);            // timeout กันค้าง 3 วิ
+      });
+    }
+
+    // 3. รอเพิ่มอีกนิด ให้ Windows ปล่อย file lock
+    await new Promise(r => setTimeout(r, 1500));
+
+    // 4. ลบ temp
+    const fs = require('fs');
+    const tempPath = 'C:\\Users\\Tawan\\Desktop\\Code\\n8n\\TTS\\temp';
+    try {
+      fs.rmSync(tempPath, { recursive: true, force: true });
+      console.log('✅ ลบ temp เรียบร้อย');
+    } catch (err) {
+      // ถ้ายังลบไม่ได้ → ลองใช้ taskkill ก่อน
+      console.warn('⚠️ ลบไม่ได้ตรงๆ กำลัง force kill...');
+      const { execSync } = require('child_process');
+      try {
+        execSync('taskkill /F /IM brave.exe /T', { stdio: 'ignore' });
+        await new Promise(r => setTimeout(r, 2000));
+        fs.rmSync(tempPath, { recursive: true, force: true });
+        console.log('✅ ลบ temp เรียบร้อย (หลัง force kill)');
+      } catch (e) {
+        console.error('❌ ลบ temp ไม่สำเร็จ:', e.message);
+      }
+    }
   }
+
 }
 
 // ── เรียกใช้ ──

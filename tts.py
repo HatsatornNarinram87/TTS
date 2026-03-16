@@ -20,52 +20,67 @@ def seconds_to_srt_time(s):
     return f"{h:02}:{m:02}:{sec:02},{ms:03}"
 
 
-def generate_srt_from_audio(audio_path, output_path=None, model_size="base", words_per_segment=6):
+def generate_srt_from_audio(audio_path, output_path=None, model_size="base", 
+                             max_words=8, max_duration=3.0):
     model = whisper.load_model(model_size)
     result = model.transcribe(audio_path, word_timestamps=True)
 
-    # --- ส่วนที่ 1: SRT แบบกลุ่มละ words_per_segment คำ ---
-    all_words = []
+    def build_srt(chunks):
+        lines = []
+        for i, (start, end, text) in enumerate(chunks, 1):
+            lines.append(str(i))
+            lines.append(f"{seconds_to_srt_time(start)} --> {seconds_to_srt_time(end)}")
+            lines.append(text)
+            lines.append("")
+        return "\n".join(lines)
+
+    def split_segment_into_chunks(words, max_words, max_duration):
+        """ตัด words ใน segment เดียวกัน ไม่ให้ยาวเกิน max_words หรือ max_duration"""
+        chunks = []
+        current = []
+
+        for word in words:
+            current.append(word)
+
+            duration = current[-1]["end"] - current[0]["start"]
+            over_words = len(current) >= max_words
+            over_time = duration >= max_duration
+
+            if over_words or over_time:
+                chunks.append(current)
+                current = []
+
+        if current:
+            chunks.append(current)  # เหลือค้างให้ใส่ด้วย
+
+        return chunks
+
+    # --- SRT แบบกลุ่ม (ตาม segment + จำกัดความยาว) ---
+    group_chunks = []
     for segment in result["segments"]:
-        all_words.extend(segment.get("words", []))
+        words = segment.get("words", [])
+        if not words:
+            continue
+        for chunk in split_segment_into_chunks(words, max_words, max_duration):
+            start = chunk[0]["start"]
+            end = chunk[-1]["end"]
+            text = " ".join(w["word"].strip() for w in chunk)
+            group_chunks.append((start, end, text))
 
-    srt_lines = []
-    index = 1
-
-    for i in range(0, len(all_words), words_per_segment):
-        chunk = all_words[i: i + words_per_segment]
-        start = seconds_to_srt_time(chunk[0]["start"])
-        end = seconds_to_srt_time(chunk[-1]["end"])
-        text = " ".join([w["word"].strip() for w in chunk])
-
-        srt_lines.append(f"{index}")
-        srt_lines.append(f"{start} --> {end}")
-        srt_lines.append(text)
-        srt_lines.append("")
-        index += 1
-
-    srt_content = "\n".join(srt_lines)
-
-    # --- ส่วนที่ 2: SRT แบบคำต่อคำ ---
-    word_srt_lines = []
-    index = 1
-
+    # --- SRT แบบคำต่อคำ ---
+    word_chunks = []
     for segment in result["segments"]:
         for word in segment.get("words", []):
-            start = seconds_to_srt_time(word["start"])
-            end = seconds_to_srt_time(word["end"])
-            text = word["word"].strip()
+            word_chunks.append((
+                word["start"],
+                word["end"],
+                word["word"].strip()
+            ))
 
-            word_srt_lines.append(f"{index}")
-            word_srt_lines.append(f"{start} --> {end}")
-            word_srt_lines.append(text)
-            word_srt_lines.append("")
-            index += 1
-
-    word_srt_content = "\n".join(word_srt_lines)
+    srt_content = build_srt(group_chunks)
+    word_srt_content = build_srt(word_chunks)
 
     if output_path:
-        # ✅ แก้: ใช้ os.path.splitext แทน .replace()
         base, ext = os.path.splitext(output_path)
         word_output_path = base + "_word" + ext
 
@@ -76,7 +91,6 @@ def generate_srt_from_audio(audio_path, output_path=None, model_size="base", wor
             f.write(word_srt_content)
 
     return srt_content, word_srt_content
-
 
 def combine_audio():
     voices_dir = "./voices"
@@ -135,11 +149,11 @@ def receive_text():
         success = combine_audio()
         if success:
             generate_karaoke_video(
-                audio_path="/output.wav",
-                bg_image_path="/background.png",
-                srt_path="/output.srt",
-                word_srt_path="/output_word.srt",
-                output_path="/video.mp4"
+                audio_path="./output.wav",
+                bg_image_path="./background.png",
+                srt_path="./output.srt",
+                word_srt_path="./output_word.srt",
+                output_path="./video.mp4"
             )
             return {"status": "ok", "message": "Audio combined and SRT generated"}, 200
         else:
